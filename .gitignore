@@ -1,0 +1,21 @@
+.gradle/
+.gradle-user-home/
+.kotlin/
+local.properties
+**/build/
+.idea/
+*.iml
+captures/
+tmp/
+
+# Local participant regression data; never publish personal timetables.
+docs/EVERYTIME_OCR_RESULT.md
+docs/screenshots/everytime-import.png
+app/src/androidTest/java/kr/heureum/app/EverytimeImageTest.kt
+
+# Local credentials and signing material.
+.env
+.env.*
+*.jks
+*.keystore
+*.p12
