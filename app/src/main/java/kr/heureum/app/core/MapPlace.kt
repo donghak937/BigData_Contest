@@ -53,6 +53,7 @@ object MapPlaceTags {
             tags["building"]=="dormitory" || tags["building:use"]=="dormitory" || tags["amenity"]=="student_accommodation" || tags["residential"]=="university" || Regex("기숙사|생활관|dormitory|student residence").containsMatchIn(name)->"dorm"
             tags["amenity"] in listOf("university","college") && tags["building"]==null || tags["landuse"]=="education"->"campus"
             tags["amenity"]=="library"->"library"
+            tags["shop"]=="convenience"->"convenience"
             tags["amenity"] in listOf("restaurant","fast_food","food_court","cafe")->"food"
             tags["building"] in listOf("university","college","school") || tags["building:use"]=="education"->"classroom"
             tags["building"]!=null->"building"
@@ -60,7 +61,7 @@ object MapPlaceTags {
         }
     }
     fun aliases(tags:Map<String,String>):List<String> = listOf("name","name:ko","name:en","short_name","ref","loc_ref","alt_name").flatMap { tags[it]?.split(';')?:emptyList() }.map{it.trim()}.filter{it.isNotEmpty()}.distinct()
-    fun label(kind:String)=when(kind){"dorm"->"기숙사";"campus"->"학교";"classroom"->"교육 건물";"library"->"도서관";"food"->"식음료 장소";else->"건물"}
+    fun label(kind:String)=when(kind){"dorm"->"기숙사";"campus"->"학교";"classroom"->"교육 건물";"library"->"도서관";"food"->"식음료 장소";"convenience"->"편의점";else->"건물"}
 }
 
 object AutomaticPlaceInference {
@@ -68,7 +69,7 @@ object AutomaticPlaceInference {
         val fix=samples.maxByOrNull { it.measuredAt }?:return null
         val relations=places.map { it to it.relation(fix) }
         val dorm=relations.firstOrNull { it.first.kind=="dorm" && it.second in listOf("inside","boundary") }
-        if(dorm!=null)return Prediction("활동 미확인","low","지도에 기숙사로 등록된 장소예요. 수업 시간만으로 출석을 단정하지 않아요.",course?.title,location(dorm.first,dorm.second),true)
+        if(dorm!=null)return Prediction("활동 미확인","low","지도에 기숙사로 등록된 장소예요. 수업 시간만으로 출석을 단정하지 않아요.",course?.title,location(dorm.first,dorm.second),true,mealExcluded=true)
         val buildings=relations.filter { it.first.kind!="campus" && it.second in listOf("inside","boundary") }
         // A GPS uncertainty circle reaching two buildings cannot select either one.
         if(buildings.size>1 || buildings.any { it.second=="boundary" })return Prediction("활동 미확인","low","GPS 오차가 건물 경계나 여러 건물에 걸쳐 있어요.",course?.title,"건물 경계·위치 불확실",true)

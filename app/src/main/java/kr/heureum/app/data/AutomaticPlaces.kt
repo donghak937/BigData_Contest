@@ -61,11 +61,11 @@ object AutomaticPlaces {
         executor.execute {
             val result=runCatching {
                 val bbox=listOf(south,west,north,east).joinToString(","){"%.4f".format(java.util.Locale.US,it)}
-                val query="[out:json][timeout:25][maxsize:33554432];(way[building]($bbox);nwr[amenity~\"^(university|college|student_accommodation|library|restaurant|fast_food|food_court|cafe)$\"]($bbox);nwr[landuse=education]($bbox);relation[type=multipolygon][building]($bbox););out geom;"
+                val query="[out:json][timeout:25][maxsize:33554432];(way[building]($bbox);nwr[amenity~\"^(university|college|student_accommodation|library|restaurant|fast_food|food_court|cafe)$\"]($bbox);nwr[shop=convenience]($bbox);nwr[landuse=education]($bbox);relation[type=multipolygon][building]($bbox););out geom;"
                 val conn=URL("https://overpass-api.de/api/interpreter").openConnection() as HttpURLConnection
                 try {
                     conn.connectTimeout=10_000;conn.readTimeout=40_000;conn.requestMethod="POST";conn.doOutput=true;conn.instanceFollowRedirects=false
-                    conn.setRequestProperty("User-Agent","Heureum/0.3 (Android; kr.heureum.app; campus pilot)")
+                    conn.setRequestProperty("User-Agent","Heureum/0.4 (Android; kr.heureum.app; campus pilot)")
                     conn.setRequestProperty("Content-Type","application/x-www-form-urlencoded; charset=UTF-8")
                     conn.outputStream.use { it.write(("data="+URLEncoder.encode(query,"UTF-8")).toByteArray()) }
                     check(conn.responseCode==200)

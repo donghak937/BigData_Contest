@@ -31,7 +31,7 @@ class TrackingService:Service(),LocationListener {
         try {
             if(Build.VERSION.SDK_INT>=29)startForeground(1,n,ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)else startForeground(1,n)
             if(!running){
-                running=true;isRunning=true;beganAt=System.currentTimeMillis();prefs.tracking=true
+                running=true;isRunning=true;beganAt=System.currentTimeMillis();prefs.trackingSince=beganAt;prefs.tracking=true
                 for(provider in listOf(LocationManager.GPS_PROVIDER,LocationManager.NETWORK_PROVIDER)) {
                     if(!locations.isProviderEnabled(provider))continue
                     try { locations.requestLocationUpdates(provider,120_000,0f,this,Looper.getMainLooper());locations.getLastKnownLocation(provider)?.let(::onLocationChanged) }catch(_:SecurityException){}catch(_:IllegalArgumentException){}
@@ -44,7 +44,7 @@ class TrackingService:Service(),LocationListener {
     override fun onLocationChanged(location:Location) {
         if(!running || !prefs.tracking)return
         if(location.hasAccuracy() && location.accuracy.isFinite() && location.accuracy>=0 && System.currentTimeMillis()-location.time in 0..600_000)
-            store.addGeo(GeoSample(location.latitude,location.longitude,location.accuracy,location.time))
+            store.addGeo(GeoSample(location.latitude,location.longitude,location.accuracy,location.time,beganAt))
     }
     private fun capture() {
         if(!prefs.tracking){stopSelf();return}
@@ -52,10 +52,12 @@ class TrackingService:Service(),LocationListener {
         val start=now/BUCKET_MS*BUCKET_MS
         val samples=store.geoSince(now-600_000).filter{it.measuredAt<=now}
         samples.maxByOrNull{it.measuredAt}?.let { AutomaticPlaces.refresh(this,it) }
-        val p=InferenceEngine.predict(now,store.courses(),prefs.campus(),samples,prefs.zones(),AutomaticPlaces.places(this))
+        val mapPlaces=AutomaticPlaces.places(this)
+        val base=InferenceEngine.predict(now,store.courses(),prefs.campus(),samples,prefs.zones(),mapPlaces)
+        val p=if(prefs.paymentEnabled && PaymentCollection.allowed(this))PaymentInference.prediction(base,now,store.payments(maxOf(prefs.trackingSince,now-30*60_000),now+1),store.geoSince(prefs.trackingSince.coerceAtLeast(now-3*3_600_000)),mapPlaces) else base
         val usage=UsageCollector.read(this,maxOf(start,beganAt),now)
         val fix=samples.maxByOrNull{it.measuredAt}
-        store.saveSegment(Segment(start,now,p.activity,p.confidence,p.reason,p.course,p.place,usage.screenMs,usage.topPackage,usage.available,fix?.latitude,fix?.longitude,fix?.accuracyM,fix?.measuredAt,observedFrom=maxOf(start,beganAt)))
+        store.saveSegment(Segment(start,now,p.activity,p.confidence,p.reason,p.course,p.place,usage.screenMs,usage.topPackage,usage.available,fix?.latitude,fix?.longitude,fix?.accuracyM,fix?.measuredAt,observedFrom=maxOf(start,beganAt),paymentId=p.paymentId))
         sendBroadcast(Intent(ACTION_UPDATED).setPackage(packageName))
         // Wait for a meaningful observed interval; never backfill unobserved time as fact.
         if(now-maxOf(start,beganAt)<180_000)return

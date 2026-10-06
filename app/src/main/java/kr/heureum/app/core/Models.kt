@@ -38,15 +38,15 @@ data class PlaceZone(val id: String, val name: String, val kind: String, val lat
         }
     }
 }
-data class GeoSample(val latitude: Double, val longitude: Double, val accuracyM: Float, val measuredAt: Long)
+data class GeoSample(val latitude: Double, val longitude: Double, val accuracyM: Float, val measuredAt: Long, val sessionStart:Long? = null)
 data class UsageSlice(val screenMs: Long, val topPackage: String?, val available: Boolean)
-data class Prediction(val activity: String, val confidence: String, val reason: String, val course: String?, val place: String, val needsEma: Boolean)
+data class Prediction(val activity: String, val confidence: String, val reason: String, val course: String?, val place: String, val needsEma: Boolean, val paymentId:Long? = null, val mealExcluded:Boolean = false)
 data class Segment(
     val start: Long, val end: Long, val activity: String, val confidence: String, val reason: String,
     val course: String?, val place: String, val screenMs: Long, val topPackage: String?, val usageAvailable: Boolean,
     val latitude: Double?, val longitude: Double?, val accuracyM: Float?, val locationTime: Long?,
     val reportedActivity: String? = null, val verification: String = "estimated",
-    val observedFrom: Long = start
+    val observedFrom: Long = start, val paymentId:Long? = null
 )
 data class Prompt(val id: Long, val segmentStart: Long, val createdAt: Long, val suggested: String, val reason: String, val kind: String, val status: String)
 

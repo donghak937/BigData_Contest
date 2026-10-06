@@ -38,6 +38,7 @@ class MainActivity:Activity(){
     private var registered=false
     private var ocrBusy=false
     private var includeCoordinates=false
+    private var includePayments=false
     private var displayDate=LocalDate.now(STUDY_ZONE)
     private val handler=Handler(Looper.getMainLooper())
     private val locationListeners=mutableListOf<LocationListener>()
@@ -63,6 +64,9 @@ class MainActivity:Activity(){
     }
     override fun onResume(){
         super.onResume()
+        if(prefs.paymentEnabled && PaymentCollection.allowed(this) && !PaymentNotificationService.connected)runCatching{
+            android.service.notification.NotificationListenerService.requestRebind(ComponentName(this,PaymentNotificationService::class.java))
+        }
         if(!registered){ContextCompat.registerReceiver(this,receiver,IntentFilter(TrackingService.ACTION_UPDATED),ContextCompat.RECEIVER_NOT_EXPORTED);registered=true}
         store.maintenance(System.currentTimeMillis());render()
     }
@@ -144,6 +148,7 @@ class MainActivity:Activity(){
         stat("${segments.count{it.verification!="estimated"}}","확인한 구간")
         stat("${segments.sumOf{it.screenMs}/60_000}분","수집 중 화면 사용")
         body.addView(stats);gap(body,24)
+        paymentTimeline(range.first,range.second)
         label(body,"활동 타임라인",18,ink,true);gap(body,12)
         if(segments.isEmpty()){
             val empty=card();label(empty,"하루를 일일이 입력하지 않아도 돼요.",16,ink,true);gap(empty,8)
@@ -159,6 +164,23 @@ class MainActivity:Activity(){
             c.addView(button("활동 수정"){activityPicker("이 구간의 활동",s.reportedActivity?:s.activity){answer->store.correctSegment(s.start,answer);render()}})
         }
         if(segments.size>80)label(body,"최신 80개 구간을 표시해요. 전체 기록은 설정에서 내보낼 수 있어요.",12)
+    }
+
+    private fun paymentTimeline(from:Long,until:Long) {
+        val events=store.payments(from,until)
+        if(events.isEmpty())return
+        label(body,"결제와 장소 기록",18,ink,true);gap(body,8)
+        val samples=store.geoSince(from-3*3_600_000).filter{it.measuredAt<until+3*3_600_000 && it.measuredAt<=System.currentTimeMillis()}
+        val places=AutomaticPlaces.places(this)
+        events.take(30).forEach{event->
+            val o=PaymentInference.observation(event,samples,places);val c=card()
+            label(c,"${time(event.observedAt)} 알림 · ${o.activity}",17,ink,true)
+            label(c,"${event.merchant} · ${appLabel(event.source)}",13)
+            if(o.observedMinutes!=null)label(c,"장소 관측 ${time(o.from!!)}–${time(o.until!!)} · 약 ${o.observedMinutes}분",14,violet,true)
+            gap(c,8);label(c,o.reason,12)
+        }
+        if(events.size>30)label(body,"최신 결제 알림 30개를 표시해요.",12)
+        gap(body,12)
     }
 
     private fun timetable(){
@@ -327,6 +349,16 @@ class MainActivity:Activity(){
         permissions.addView(button("위치 권한 설정"){requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),LOCATION_PERMISSION)})
         permissions.addView(button("앱 사용정보 연결"){runCatching{startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS,Uri.parse("package:$packageName")))}.onFailure{startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))}})
         permissions.addView(button("알림 설정"){if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),NOTIFICATION_PERMISSION)else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,packageName))})
+        val payments=card();label(payments,"결제 알림 연결 (선택)",18,ink,true);gap(payments,6)
+        label(payments,if(!prefs.paymentEnabled)"수집 꺼짐" else if(!PaymentCollection.allowed(this))"알림 접근 권한이 필요해요." else if(!PaymentNotificationService.connected)"알림 서비스 연결을 기다리고 있어요." else if(!prefs.tracking)"연결됨 · 활동 기록을 켜면 수집해요." else "선택한 결제 앱 알림을 수집 중이에요.",14,violet,true)
+        label(payments,"결제 알림의 가맹점·알림 시각을 GPS와 연결해요. 금액·카드번호·계좌번호·알림 원문은 저장하지 않아요. 알림이 없거나 형식이 다르면 미확인으로 남겨요.",13)
+        if(prefs.paymentSources.isNotEmpty())label(payments,"선택 앱: ${prefs.paymentSources.joinToString { appLabel(it) }}",12)
+        payments.addView(button(if(prefs.paymentEnabled)"수집 앱 변경" else "결제 알림 연결",true){paymentConnection()})
+        if(prefs.paymentEnabled){
+            payments.addView(button("알림 접근 설정"){notificationAccess()})
+            payments.addView(button("결제 알림 연결 끄기"){synchronized(PaymentCollection.lock){prefs.paymentEnabled=false};render();toast("새 수집을 중지했어요. 기존 기록은 삭제 버튼으로 지울 수 있어요.")})
+        }
+        payments.addView(button("결제 기록만 삭제"){AlertDialog.Builder(this).setTitle("결제 기록을 삭제할까요?").setMessage("결제 수집을 끄고 결제 알림 기록을 지워요. 기존 활동 추정·EMA와 내보낸 파일은 유지돼요.").setNegativeButton("취소",null).setPositiveButton("삭제"){_,_->synchronized(PaymentCollection.lock){prefs.paymentEnabled=false;store.clearPayments()};render()}.show()})
         val campus=card();label(campus,"자동 장소 인식",18,ink,true);gap(campus,6)
         label(campus,AutomaticPlaces.status(this),14)
         label(campus,"학교·기숙사·건물 이름과 경계를 지도에서 가져와요. 지도 정보가 빠졌거나 GPS가 모호하면 확인 필요로 남겨요.",13)
@@ -338,9 +370,29 @@ class MainActivity:Activity(){
         val validation=CheckBox(this).apply{text="연구용 검증 질문";isChecked=prefs.validation;setOnCheckedChangeListener{_,v->prefs.validation=v}}
         ema.addView(validation);label(ema,"켜면 신뢰도가 높은 일부 구간도 확인해요. 하루 최대 1회이며 전체 질문 상한 안에 포함돼요. 별도 정확도 평가에는 대표 표본이 필요해요.",12)
         val data=card();label(data,"데이터 보관",18,ink,true);gap(data,8)
-        label(data,"위치·활동·EMA는 30일 뒤 자동 삭제해요. 시간표와 장소는 직접 삭제할 때까지 유지돼요. 활동 기록은 서버로 전송하지 않아요. 자동 장소 연결 시 약 4km 범위와 IP가 지도 제공자에 전달되고, 건물 정보는 기기에 7일간 저장해요. 지도 화면에서도 표시 지역의 배경을 인터넷으로 불러와요.",13)
+        label(data,"위치·활동·EMA·결제 알림은 30일 보관 정책을 적용해요. 시간표와 장소는 직접 삭제할 때까지 유지돼요. 활동·결제 기록은 서버로 전송하지 않아요. 자동 장소 연결 시 약 4km 범위와 IP가 지도 제공자에 전달되고, 건물 정보는 기기에 7일간 저장해요. 지도 화면에서도 표시 지역의 배경을 인터넷으로 불러와요.",13)
         data.addView(button("연구 기록 내보내기"){exportDialog()})
-        data.addView(button("모든 데이터 삭제"){AlertDialog.Builder(this).setTitle("모든 데이터를 삭제할까요?").setMessage("수집을 중지하고 시간표, 장소, 위치, 활동, EMA, 설정, 지도 캐시를 삭제해요. 내보낸 파일은 따로 관리해 주세요.").setNegativeButton("취소",null).setPositiveButton("삭제"){_,_->stopTracking();store.clearAll();prefs.clear();AutomaticPlaces.clear(this);java.io.File(filesDir,"map-tiles").deleteRecursively();getSystemService(NotificationManager::class.java).cancelAll();render()}.show()})
+        data.addView(button("모든 데이터 삭제"){AlertDialog.Builder(this).setTitle("모든 데이터를 삭제할까요?").setMessage("수집을 중지하고 시간표, 장소, 위치, 활동, EMA, 결제 알림, 설정, 지도 캐시를 삭제해요. 내보낸 파일은 따로 관리해 주세요.").setNegativeButton("취소",null).setPositiveButton("삭제"){_,_->synchronized(PaymentCollection.lock){stopTracking();prefs.paymentEnabled=false;store.clearAll();prefs.clear()};AutomaticPlaces.clear(this);java.io.File(filesDir,"map-tiles").deleteRecursively();getSystemService(NotificationManager::class.java).cancelAll();render()}.show()})
+    }
+    private fun notificationAccess(){
+        runCatching{startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))}.onFailure{toast("기기 설정에서 흐름의 알림 접근을 허용해 주세요.")}
+    }
+    private fun paymentConnection(){
+        @Suppress("DEPRECATION")
+        val apps=packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),0)
+            .map{it.activityInfo.packageName to it.loadLabel(packageManager).toString()}.distinctBy{it.first}
+            .filter{it.first!=packageName && Regex("토스|카드|페이|은행|뱅크|월렛|wallet|bank|card|pay|toss",RegexOption.IGNORE_CASE).containsMatchIn(it.second+" "+it.first)}.sortedBy{it.second}
+        if(apps.isEmpty()){error("설치된 결제 앱을 찾지 못했어요. 토스·카드사 앱이 설치되고 결제 알림이 켜져 있어야 해요.");return}
+        val chosen=apps.map{it.first in prefs.paymentSources}.toBooleanArray()
+        AlertDialog.Builder(this).setTitle("결제 알림을 보내는 앱 선택")
+            .setMultiChoiceItems(apps.map{it.second}.toTypedArray(),chosen){_,i,v->chosen[i]=v}
+            .setNegativeButton("취소",null).setPositiveButton("다음"){_,_->
+                val sources=apps.filterIndexed{i,_->chosen[i]}.map{it.first}.toSet()
+                if(sources.isEmpty()){toast("결제 알림을 보내는 앱을 하나 이상 선택해 주세요.");return@setPositiveButton}
+                AlertDialog.Builder(this).setTitle("선택한 결제 알림을 연결할까요?")
+                    .setMessage("안드로이드의 알림 접근 권한은 다른 알림에도 접근할 수 있는 권한이에요. 흐름은 선택한 앱만 처리하고 인증·송금 알림은 제외해요. 활동 수집 중에 새로 도착한 결제·취소 알림에서 가맹점과 알림 시각만 기기에 30일 보관해요. 금액은 중복·취소 비교에 잠깐 사용하고 저장하지 않아요. 결제 시각과 알림 도착 시각은 다를 수 있고, 품목이나 실제 식사 시간은 알 수 없어요. 토스 계정이나 과거 금융 내역에는 연결하지 않아요.")
+                    .setNegativeButton("취소",null).setPositiveButton("동의하고 연결"){_,_->synchronized(PaymentCollection.lock){prefs.paymentSources=sources;prefs.paymentSince=System.currentTimeMillis();prefs.paymentEnabled=true};render();notificationAccess()}.show()
+            }.show()
     }
     private fun emaSettings(){
         val f=dialogContent();val cap=field(f,"하루 최대 질문 수 (0~6)",prefs.maxPrompts.toString());val gap=field(f,"최소 간격 (30~240분)",prefs.gapMinutes.toString())
@@ -461,15 +513,17 @@ class MainActivity:Activity(){
     }
     private fun stopTracking(){prefs.tracking=false;stopService(Intent(this,TrackingService::class.java))}
     private fun exportDialog(){
-        val f=dialogContent();label(f,"파일에는 시간표, 추정 활동, 장소 설정, 앱 식별자, EMA 응답이 들어가요. 좌표는 선택한 경우에만 포함돼요.",13)
+        val f=dialogContent();label(f,"파일에는 시간표, 추정 활동, 장소 설정, 앱 식별자, EMA 응답이 들어가요. 식사 추정 이유에는 결제 근거가 포함될 수 있어요. 결제 알림의 가맹점·시각은 별도로 선택해야 포함돼요.",13)
         val coords=CheckBox(this).apply{text="원본 GPS 좌표 포함";isChecked=false};f.addView(coords)
-        AlertDialog.Builder(this).setTitle("연구 기록 내보내기").setView(f).setNegativeButton("취소",null).setPositiveButton("파일 저장"){_,_->includeCoordinates=coords.isChecked;startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/json").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,"heureum-${LocalDate.now(STUDY_ZONE)}.json"),EXPORT_REQUEST)}.show()
+        val paymentRows=CheckBox(this).apply{text="결제 가맹점·알림 시각 포함 (선택)";isChecked=false};f.addView(paymentRows)
+        AlertDialog.Builder(this).setTitle("연구 기록 내보내기").setView(f).setNegativeButton("취소",null).setPositiveButton("파일 저장"){_,_->includeCoordinates=coords.isChecked;includePayments=paymentRows.isChecked;startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/json").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,"heureum-${LocalDate.now(STUDY_ZONE)}.json"),EXPORT_REQUEST)}.show()
     }
     @Deprecated("Activity result bridge")override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){
         super.onActivityResult(requestCode,resultCode,data);if(resultCode!=RESULT_OK)return
         val uri=data?.data?:return
         when(requestCode){IMAGE_REQUEST->readImage(uri);EXPORT_REQUEST->{store.maintenance(System.currentTimeMillis());runCatching{
-            val json=JSONObject(store.export(includeCoordinates)).put("schemaVersion",2).put("currentPlaceSettings",prefs.placeSettingsJson(includeCoordinates))
+            val json=JSONObject(store.export(includeCoordinates)).put("schemaVersion",3).put("currentPlaceSettings",prefs.placeSettingsJson(includeCoordinates)).put("paymentsIncluded",includePayments)
+            if(includePayments)json.put("payments",store.paymentExport(AutomaticPlaces.places(this)))
             contentResolver.openOutputStream(uri)?.use{it.write(json.toString(2).toByteArray(Charsets.UTF_8))}?:error("파일을 열 수 없어요.")
         }.onSuccess{toast("기록을 저장했어요.")}.onFailure{error("기록을 저장하지 못했어요.")}}}
     }

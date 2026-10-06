@@ -29,7 +29,7 @@ object InferenceEngine {
             if(dorms.isNotEmpty()) {
                 val inside=dorms.firstOrNull { distance(it,fix)+fix.accuracyM <= it.radiusM }
                 val location=inside?.name ?: "${dorms.first().name} 경계·위치 불확실"
-                return Prediction("활동 미확인","low",if(inside!=null)"기숙사에 있어요. 수업 시간이어도 출석·휴식·온라인 수업을 단정하지 않아요." else "GPS 오차가 기숙사에 걸쳐 있어요. 수업 건물과 구분할 수 없어 확인이 필요해요.",scheduled.takeIf { it.isNotEmpty() }?.joinToString { it.title },location,true)
+                return Prediction("활동 미확인","low",if(inside!=null)"기숙사에 있어요. 수업 시간이어도 출석·휴식·온라인 수업을 단정하지 않아요." else "GPS 오차가 기숙사에 걸쳐 있어요. 수업 건물과 구분할 수 없어 확인이 필요해요.",scheduled.takeIf { it.isNotEmpty() }?.joinToString { it.title },location,true,mealExcluded=true)
             }
         }
         if (scheduled.size > 1) return Prediction("활동 미확인", "low", "같은 시간에 일정이 겹쳐요.", scheduled.joinToString { it.title }, place, true)

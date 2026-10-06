@@ -11,7 +11,7 @@ import org.json.JSONObject
 import java.time.Instant
 import java.time.LocalDate
 
-class LocalStore(context: Context, databaseName: String = "heureum.db") : SQLiteOpenHelper(context.applicationContext ?: context, databaseName, null, 1) {
+class LocalStore(context: Context, databaseName: String = "heureum.db") : SQLiteOpenHelper(context.applicationContext ?: context, databaseName, null, 2) {
     override fun onConfigure(db: SQLiteDatabase) { db.rawQuery("PRAGMA secure_delete=ON",null).use { it.moveToFirst() } }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE courses(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,weekday INTEGER NOT NULL,startMinute INTEGER NOT NULL,endMinute INTEGER NOT NULL,room TEXT NOT NULL,validFrom TEXT NOT NULL,validUntil TEXT NOT NULL,source TEXT NOT NULL)")
@@ -19,8 +19,50 @@ class LocalStore(context: Context, databaseName: String = "heureum.db") : SQLite
         db.execSQL("CREATE TABLE segments(start INTEGER PRIMARY KEY,end INTEGER NOT NULL,observedFrom INTEGER NOT NULL,activity TEXT NOT NULL,confidence TEXT NOT NULL,reason TEXT NOT NULL,course TEXT,place TEXT NOT NULL,screenMs INTEGER NOT NULL,topPackage TEXT,usageAvailable INTEGER NOT NULL,latitude REAL,longitude REAL,accuracyM REAL,locationTime INTEGER,reportedActivity TEXT,reportedAt INTEGER,verification TEXT NOT NULL DEFAULT 'estimated')")
         db.execSQL("CREATE TABLE prompts(id INTEGER PRIMARY KEY AUTOINCREMENT,segmentStart INTEGER NOT NULL UNIQUE,createdAt INTEGER NOT NULL,suggested TEXT NOT NULL,reason TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',answeredAt INTEGER,response TEXT)")
         db.execSQL("CREATE INDEX prompts_time ON prompts(createdAt)")
+        createPayments(db)
     }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    private fun createPayments(db:SQLiteDatabase) {
+        db.execSQL("ALTER TABLE segments ADD COLUMN paymentId INTEGER")
+        db.execSQL("ALTER TABLE geo ADD COLUMN sessionStart INTEGER")
+        db.execSQL("CREATE TABLE payments(id INTEGER PRIMARY KEY AUTOINCREMENT,observedAt INTEGER NOT NULL,source TEXT NOT NULL,merchant TEXT NOT NULL,category TEXT NOT NULL,kind TEXT NOT NULL,usable INTEGER NOT NULL,fingerprint TEXT NOT NULL,notificationKey TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX payments_time ON payments(observedAt)")
+    }
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { if(oldVersion<2)createPayments(db) }
+
+    @Synchronized fun addPayment(at:Long,source:String,p:ParsedPayment,fingerprint:String,key:String):Boolean {
+        val db=writableDatabase;db.beginTransaction()
+        try {
+            // Same approval from two selected apps, or notification updates, count once.
+            val exists=db.rawQuery("SELECT id FROM payments WHERE kind=? AND ((fingerprint=? AND ABS(observedAt-?)<=90000) OR (notificationKey=? AND fingerprint=? AND ABS(observedAt-?)<=300000)) LIMIT 1",arrayOf(p.kind,fingerprint,at.toString(),key,fingerprint,at.toString())).use{it.moveToFirst()}
+            if(exists){db.setTransactionSuccessful();return false}
+            val cancellation=db.rawQuery("SELECT id FROM payments WHERE fingerprint=? AND kind='cancel' AND ABS(observedAt-?)<=86400000 LIMIT 1",arrayOf(fingerprint,at.toString())).use{it.moveToFirst()}
+            db.insertOrThrow("payments",null,ContentValues().apply{
+                put("observedAt",at);put("source",source);put("merchant",p.merchant);put("category",PaymentParser.category(p.merchant));put("kind",p.kind)
+                put("usable",if(p.kind=="approval" && !cancellation)1 else 0);put("fingerprint",fingerprint);put("notificationKey",key)
+            })
+            if(p.kind=="cancel"){
+                db.update("payments",ContentValues().apply{put("usable",0)},"fingerprint=? AND kind='approval' AND ABS(observedAt-?)<=86400000",arrayOf(fingerprint,at.toString()))
+                db.execSQL("UPDATE segments SET activity='활동 미확인',confidence='low',reason='결제 근거와 일치할 수 있는 취소 알림이 있어 식사 추정을 철회했어요.' WHERE paymentId IN (SELECT id FROM payments WHERE usable=0)")
+                db.execSQL("UPDATE prompts SET status='expired',reason='결제 취소로 추정이 철회됐어요.' WHERE status='pending' AND segmentStart IN (SELECT start FROM segments WHERE paymentId IN (SELECT id FROM payments WHERE usable=0))")
+            }
+            db.setTransactionSuccessful();return true
+        } finally {db.endTransaction()}
+    }
+    @Synchronized fun payments(from:Long,until:Long):List<PaymentEvent> = readableDatabase.rawQuery("SELECT * FROM payments WHERE observedAt>=? AND observedAt<? ORDER BY observedAt DESC",arrayOf(from.toString(),until.toString())).use{c->
+        buildList{while(c.moveToNext())add(PaymentEvent(c.l("id"),c.l("observedAt"),c.s("source"),c.s("merchant"),c.s("category"),c.s("kind"),c.i("usable")==1))}
+    }
+    @Synchronized fun clearPayments(){writableDatabase.delete("payments",null,null)}
+    @Synchronized fun paymentExport(places:List<MapPlace> = emptyList()):JSONArray {
+        val rows=JSONArray();val samples=geoSince(0)
+        payments(0,System.currentTimeMillis()+1).forEach{e->
+            val o=PaymentInference.observation(e,samples,places)
+            rows.put(JSONObject().put("id",e.id).put("observedAt",e.observedAt).put("timeMeaning","notification posted time; not verified transaction time")
+                .put("source",e.source).put("merchant",e.merchant).put("category",e.category).put("kind",e.kind).put("usable",e.usable)
+                .put("activityCandidate",o.activity).put("reason",o.reason).put("place",o.place?:JSONObject.NULL)
+                .put("observedFrom",o.from?:JSONObject.NULL).put("observedUntil",o.until?:JSONObject.NULL).put("observedMinutes",o.observedMinutes?:JSONObject.NULL)
+                .put("placeInterpretation","computed from current map cache; observed span, not actual eating duration"))
+        };return rows
+    }
 
     @Synchronized fun courses(): List<Course> = readableDatabase.rawQuery("SELECT * FROM courses ORDER BY weekday,startMinute", null).use { c ->
         buildList { while (c.moveToNext()) add(Course(c.l("id"),c.s("title"),c.i("weekday"),c.i("startMinute"),c.i("endMinute"),c.s("room"),c.s("validFrom"),c.s("validUntil"),c.s("source"))) }
@@ -40,11 +82,11 @@ class LocalStore(context: Context, databaseName: String = "heureum.db") : SQLite
     }
     @Synchronized fun deleteCourse(id: Long) { writableDatabase.delete("courses", "id=?", arrayOf(id.toString())) }
     @Synchronized fun addGeo(fix: GeoSample) {
-        val v = ContentValues().apply { put("measuredAt",fix.measuredAt); put("latitude",fix.latitude); put("longitude",fix.longitude); put("accuracyM",fix.accuracyM) }
+        val v = ContentValues().apply { put("measuredAt",fix.measuredAt); put("latitude",fix.latitude); put("longitude",fix.longitude); put("accuracyM",fix.accuracyM);put("sessionStart",fix.sessionStart) }
         writableDatabase.insertWithOnConflict("geo",null,v,SQLiteDatabase.CONFLICT_REPLACE)
     }
     @Synchronized fun geoSince(since: Long): List<GeoSample> = readableDatabase.rawQuery("SELECT * FROM geo WHERE measuredAt>=? ORDER BY measuredAt", arrayOf(since.toString())).use { c ->
-        buildList { while (c.moveToNext()) add(GeoSample(c.d("latitude"),c.d("longitude"),c.f("accuracyM"),c.l("measuredAt"))) }
+        buildList { while (c.moveToNext()) add(GeoSample(c.d("latitude"),c.d("longitude"),c.f("accuracyM"),c.l("measuredAt"),c.nl("sessionStart"))) }
     }
     @Synchronized fun saveSegment(s: Segment) {
         // Update measurements without destroying independent EMA responses.
@@ -52,11 +94,12 @@ class LocalStore(context: Context, databaseName: String = "heureum.db") : SQLite
             put("start",s.start); put("end",s.end); put("observedFrom",s.observedFrom); put("activity",s.activity); put("confidence",s.confidence); put("reason",s.reason)
             put("course",s.course); put("place",s.place); put("screenMs",s.screenMs); put("topPackage",s.topPackage); put("usageAvailable",if(s.usageAvailable)1 else 0)
             put("latitude",s.latitude); put("longitude",s.longitude); put("accuracyM",s.accuracyM); put("locationTime",s.locationTime)
+            put("paymentId",s.paymentId)
         }
         if (writableDatabase.update("segments",v,"start=?", arrayOf(s.start.toString())) == 0) writableDatabase.insertOrThrow("segments",null,v)
     }
     @Synchronized fun segments(from: Long, until: Long): List<Segment> = readableDatabase.rawQuery("SELECT * FROM segments WHERE start>=? AND start<? ORDER BY start DESC",arrayOf(from.toString(),until.toString())).use { c ->
-        buildList { while(c.moveToNext()) add(Segment(c.l("start"),c.l("end"),c.s("activity"),c.s("confidence"),c.s("reason"),c.ns("course"),c.s("place"),c.l("screenMs"),c.ns("topPackage"),c.i("usageAvailable")==1,c.nd("latitude"),c.nd("longitude"),c.nf("accuracyM"),c.nl("locationTime"),c.ns("reportedActivity"),c.s("verification"),c.l("observedFrom"))) }
+        buildList { while(c.moveToNext()) add(Segment(c.l("start"),c.l("end"),c.s("activity"),c.s("confidence"),c.s("reason"),c.ns("course"),c.s("place"),c.l("screenMs"),c.ns("topPackage"),c.i("usageAvailable")==1,c.nd("latitude"),c.nd("longitude"),c.nf("accuracyM"),c.nl("locationTime"),c.ns("reportedActivity"),c.s("verification"),c.l("observedFrom"),c.nl("paymentId"))) }
     }
     @Synchronized fun correctSegment(start: Long, activity: String) {
         writableDatabase.update("segments",ContentValues().apply { put("reportedActivity",activity); put("reportedAt",System.currentTimeMillis()); put("verification","corrected") },"start=?",arrayOf(start.toString()))
@@ -85,17 +128,17 @@ class LocalStore(context: Context, databaseName: String = "heureum.db") : SQLite
     @Synchronized fun maintenance(now: Long) {
         writableDatabase.execSQL("UPDATE prompts SET status='expired' WHERE status='pending' AND createdAt<?",arrayOf(now-2*3_600_000L))
         val cutoff = now - 30 * 86_400_000L
-        for (table in listOf("segments","geo","prompts")) {
-            val col = when(table) { "segments" -> "start"; "geo" -> "measuredAt"; else -> "createdAt" }
+        for (table in listOf("segments","geo","prompts","payments")) {
+            val col = when(table) { "segments" -> "start"; "geo" -> "measuredAt"; "payments" -> "observedAt"; else -> "createdAt" }
             writableDatabase.delete(table,"$col<?",arrayOf(cutoff.toString()))
         }
     }
     @Synchronized fun clearAll() {
         val db=writableDatabase;db.beginTransaction()
-        try { listOf("courses","geo","segments","prompts").forEach { db.delete(it,null,null) };db.setTransactionSuccessful() } finally { db.endTransaction() }
+        try { listOf("courses","geo","segments","prompts","payments").forEach { db.delete(it,null,null) };db.setTransactionSuccessful() } finally { db.endTransaction() }
     }
     @Synchronized fun export(includeCoordinates: Boolean): String {
-        val root=JSONObject().put("schemaVersion",1).put("exportedAt",Instant.now().toString()).put("studyTimezone",STUDY_ZONE.id)
+        val root=JSONObject().put("schemaVersion",3).put("paymentsIncluded",false).put("exportedAt",Instant.now().toString()).put("studyTimezone",STUDY_ZONE.id)
             .put("retentionDays",30).put("coordinatesIncluded",includeCoordinates)
         for(table in listOf("courses","segments","prompts") + if(includeCoordinates)listOf("geo") else emptyList()) {
             val rows=JSONArray()
@@ -126,6 +169,11 @@ class LocalStore(context: Context, databaseName: String = "heureum.db") : SQLite
 class Preferences(context: Context, name: String = "settings") {
     private val p=context.getSharedPreferences(name,Context.MODE_PRIVATE)
     var tracking: Boolean get()=p.getBoolean("tracking",false);set(v){p.edit().putBoolean("tracking",v).apply()}
+    var trackingSince: Long get()=p.getLong("trackingSince",Long.MAX_VALUE);set(v){p.edit().putLong("trackingSince",v).apply()}
+    var paymentEnabled: Boolean get()=p.getBoolean("paymentEnabled",false);set(v){p.edit().putBoolean("paymentEnabled",v).apply()}
+    var paymentSince: Long get()=p.getLong("paymentSince",Long.MAX_VALUE);set(v){p.edit().putLong("paymentSince",v).apply()}
+    var paymentSources: Set<String> get()=p.getStringSet("paymentSources",emptySet())!!.toSet();set(v){p.edit().putStringSet("paymentSources",v.toSet()).apply()}
+    var paymentSalt: String get()=p.getString("paymentSalt",null)?:java.util.UUID.randomUUID().toString().also{p.edit().putString("paymentSalt",it).apply()};set(v){p.edit().putString("paymentSalt",v).apply()}
     var maxPrompts: Int get()=p.getInt("maxPrompts",3);set(v){p.edit().putInt("maxPrompts",v.coerceIn(0,6)).apply()}
     var gapMinutes: Int get()=p.getInt("gapMinutes",90);set(v){p.edit().putInt("gapMinutes",v.coerceIn(30,240)).apply()}
     var validation: Boolean get()=p.getBoolean("validation",false);set(v){p.edit().putBoolean("validation",v).apply()}
