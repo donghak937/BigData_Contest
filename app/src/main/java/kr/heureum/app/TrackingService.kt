@@ -53,9 +53,10 @@ class TrackingService:Service(),LocationListener {
         val samples=store.geoSince(now-600_000).filter{it.measuredAt<=now}
         samples.maxByOrNull{it.measuredAt}?.let { AutomaticPlaces.refresh(this,it) }
         val mapPlaces=AutomaticPlaces.places(this)
-        val base=InferenceEngine.predict(now,store.courses(),prefs.campus(),samples,prefs.zones(),mapPlaces)
-        val p=if(prefs.paymentEnabled && PaymentCollection.allowed(this))PaymentInference.prediction(base,now,store.payments(maxOf(prefs.trackingSince,now-30*60_000),now+1),store.geoSince(prefs.trackingSince.coerceAtLeast(now-3*3_600_000)),mapPlaces) else base
         val usage=UsageCollector.read(this,maxOf(start,beganAt),now)
+        val device=DeviceContext(usage.screenMs,now-maxOf(start,beganAt),AppCategory.of(usage.topPackage,androidCategory(usage.topPackage)),usage.available)
+        val base=InferenceEngine.predict(now,store.courses(),prefs.campus(),samples,prefs.zones(),mapPlaces,device)
+        val p=if(prefs.paymentEnabled && PaymentCollection.allowed(this))PaymentInference.prediction(base,now,store.payments(maxOf(prefs.trackingSince,now-30*60_000),now+1),store.geoSince(prefs.trackingSince.coerceAtLeast(now-3*3_600_000)),mapPlaces) else base
         val fix=samples.maxByOrNull{it.measuredAt}
         store.saveSegment(Segment(start,now,p.activity,p.confidence,p.reason,p.course,p.place,usage.screenMs,usage.topPackage,usage.available,fix?.latitude,fix?.longitude,fix?.accuracyM,fix?.measuredAt,observedFrom=maxOf(start,beganAt),paymentId=p.paymentId))
         sendBroadcast(Intent(ACTION_UPDATED).setPackage(packageName))
@@ -73,6 +74,8 @@ class TrackingService:Service(),LocationListener {
         val id=store.createPrompt(start,now,p.activity,p.reason,if(validation)"validation" else "uncertainty")
         if(id>0){notifyPrompt(this,store.prompts().first{it.id==id});sendBroadcast(Intent(ACTION_UPDATED).setPackage(packageName))}
     }
+    /** ApplicationInfo.category of a launcher app (visible via the manifest's launcher <queries>), or -1. */
+    private fun androidCategory(pkg:String?):Int=if(pkg==null)-1 else runCatching{packageManager.getApplicationInfo(pkg,0).category}.getOrDefault(-1)
     override fun onProviderEnabled(provider:String)=Unit
     override fun onProviderDisabled(provider:String)=Unit
     @Deprecated("Legacy location callback") override fun onStatusChanged(provider:String?,status:Int,extras:Bundle?)=Unit

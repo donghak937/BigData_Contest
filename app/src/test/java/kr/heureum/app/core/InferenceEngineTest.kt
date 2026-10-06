@@ -20,21 +20,21 @@ class InferenceEngineTest {
             assertEquals("low",p.confidence);assertTrue(p.needsEma);assertEquals("위치 미확인",p.place)
         }
     }
-    @Test fun schoolPresenceWithoutScheduleDoesNotInventClass(){
+    @Test fun schoolPresenceWithoutScheduleIsLowConfidenceStudyNotClass(){
         val p=InferenceEngine.predict(now,emptyList(),campus,listOf(fix(now-180_000),fix()))
-        assertEquals("활동 미확인",p.activity);assertTrue(p.needsEma)
+        assertEquals("공부",p.activity);assertEquals("low",p.confidence);assertTrue(p.needsEma)
     }
-    @Test fun outsideLocationIsConflictNotAbsenceProof(){
+    @Test fun outsideLocationDuringClassIsLowConfidenceAndAsked(){
         val p=InferenceEngine.predict(now,listOf(course),campus,listOf(fix(lat=37.58)))
-        assertEquals("활동 미확인",p.activity);assertEquals("학교 밖",p.place);assertTrue(p.reason.contains("온라인"))
+        assertNotEquals("수업",p.activity);assertEquals("학교 밖",p.place);assertEquals("low",p.confidence);assertTrue(p.reason.contains("학교 밖"));assertTrue(p.needsEma)
     }
-    @Test fun uncertaintyAtBoundaryCannotConfirmSchool(){
+    @Test fun uncertaintyAtBoundaryIsNotHighConfidence(){
         val p=InferenceEngine.predict(now,listOf(course),campus,listOf(fix(lat=37.55355,accuracy=60f)))
-        assertEquals("학교 경계·위치 불확실",p.place);assertTrue(p.needsEma)
+        assertEquals("수업",p.activity);assertNotEquals("high",p.confidence);assertTrue(p.needsEma)
     }
-    @Test fun conflictingSchedulesNeedConfirmation(){
+    @Test fun conflictingSchedulesPickOneButNeedConfirmation(){
         val p=InferenceEngine.predict(now,listOf(course,course.copy(title="다른 수업")),campus,listOf(fix()))
-        assertEquals("활동 미확인",p.activity);assertTrue(p.needsEma)
+        assertEquals("수업",p.activity);assertNotEquals("high",p.confidence);assertTrue(p.reason.contains("겹쳐"));assertTrue(p.needsEma)
     }
     @Test fun leavingAndReturningBreaksSustainedStay(){
         val p=InferenceEngine.predict(now,listOf(course),campus,listOf(fix(now-240_000),fix(now-120_000,lat=37.58),fix()))

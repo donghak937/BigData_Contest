@@ -10,31 +10,31 @@ class AutomaticPlaceTest {
     private fun ring(lat:Double=37.0,lon:Double=127.0,size:Double=.001)=listOf(MapPoint(lat-size,lon-size),MapPoint(lat-size,lon+size),MapPoint(lat+size,lon+size),MapPoint(lat+size,lon-size),MapPoint(lat-size,lon-size))
     private fun place(kind:String="classroom",aliases:List<String> = listOf("NTH"),lat:Double=37.0)=MapPlace(kind,kind,kind,MapPoint(lat,127.0),listOf(ring(lat)),aliases=aliases)
     private fun fix(lat:Double=37.0,lon:Double=127.0,accuracy:Float=5f,time:Long=now)=GeoSample(lat,lon,accuracy,time)
-    @Test fun dormOverridesScheduledClassWithoutRegistration(){
+    @Test fun dormDuringClassIsOnlyLowConfidenceClass(){
         val p=InferenceEngine.predict(now,listOf(course),null,listOf(fix()),mapPlaces=listOf(place("dorm")))
-        assertEquals("활동 미확인",p.activity);assertEquals("dorm",p.place);assertTrue(p.needsEma)
+        assertEquals("수업",p.activity);assertEquals("low",p.confidence);assertEquals("dorm",p.place);assertTrue(p.needsEma);assertTrue(p.mealExcluded)
     }
     @Test fun linkedFootprintAndDwellGiveClass(){
         val p=InferenceEngine.predict(now,listOf(course),null,listOf(fix(time=now-120_000),fix()),mapPlaces=listOf(place()))
         assertEquals("수업",p.activity);assertEquals("high",p.confidence);assertFalse(p.needsEma)
     }
     @Test fun circleReachingBoundaryIsUncertain(){assertEquals("boundary",place().relation(fix(lon=127.00095,accuracy=20f)))}
-    @Test fun outsideCircleReachingDormStillExcludes(){
+    @Test fun fixDriftingJustOutsideDormStillCountsAsDorm(){
         val p=InferenceEngine.predict(now,listOf(course),null,listOf(fix(lon=127.0011,accuracy=20f)),mapPlaces=listOf(place("dorm")))
-        assertEquals("활동 미확인",p.activity);assertTrue(p.place.contains("불확실"))
+        assertEquals("low",p.confidence);assertTrue(p.place.contains("부근"));assertTrue(p.mealExcluded)
     }
     @Test fun nearbyNodeNeverProvesBuildingContainment(){
         val p=place().copy(outlines=emptyList());assertEquals("label",p.relation(fix()))
-        val prediction=InferenceEngine.predict(now,listOf(course),null,listOf(fix()),mapPlaces=listOf(p))
-        assertEquals("low",prediction.confidence);assertTrue(prediction.needsEma)
+        val prediction=InferenceEngine.predict(now,listOf(course),null,listOf(fix(time=now-180_000),fix()),mapPlaces=listOf(p))
+        assertNotEquals("high",prediction.confidence);assertTrue(prediction.needsEma)
     }
     @Test fun unknownAbbreviationNeverCreatesRoomLink(){
-        val p=InferenceEngine.predict(now,listOf(course),null,listOf(fix()),mapPlaces=listOf(place(aliases=listOf("뉴턴홀"))))
-        assertEquals("low",p.confidence);assertTrue(p.needsEma)
+        val p=InferenceEngine.predict(now,listOf(course),null,listOf(fix(time=now-180_000),fix()),mapPlaces=listOf(place(aliases=listOf("뉴턴홀"))))
+        assertEquals("수업",p.activity);assertEquals("medium",p.confidence);assertTrue(p.needsEma)
     }
-    @Test fun ambiguousTwoBuildingsNeverClaimsClass(){
+    @Test fun linkedBuildingWinsOverOverlappingFootprint(){
         val p=InferenceEngine.predict(now,listOf(course),null,listOf(fix()),mapPlaces=listOf(place(),place("library")))
-        assertEquals("활동 미확인",p.activity)
+        assertEquals("수업",p.activity);assertEquals("medium",p.confidence)
     }
     @Test fun courtyardHoleIsOutside(){
         val p=place().copy(holes=listOf(ring(size=.0003)))
@@ -44,9 +44,9 @@ class AutomaticPlaceTest {
         val p=InferenceEngine.predict(now,listOf(course),null,listOf(fix(time=now-600_001)),mapPlaces=listOf(place()))
         assertEquals("low",p.confidence)
     }
-    @Test fun genericBuildingWithoutTimetableCannotDecideActivity(){
+    @Test fun libraryWithoutTimetableIsStudy(){
         val p=InferenceEngine.predict(now,emptyList(),null,listOf(fix()),mapPlaces=listOf(place("library")))
-        assertEquals("활동 미확인",p.activity);assertEquals("library",p.place)
+        assertEquals("공부",p.activity);assertEquals("library",p.place);assertEquals("medium",p.confidence)
     }
     @Test fun mapsProvideAliasesButDoNotInventThem(){
         assertEquals("dorm",MapPlaceTags.kind(mapOf("name" to "학생생활관","building" to "yes")))
@@ -59,8 +59,9 @@ class AutomaticPlaceTest {
     @Test fun optionalAliasCorrectionStillWorksWithAutomaticMap(){
         val zone=PlaceZone("override","뉴턴홀","classroom",37.0,127.0,100f,listOf("NTH"))
         val p=InferenceEngine.predict(now,listOf(course),null,listOf(fix()),listOf(zone),listOf(place(aliases=listOf("뉴턴홀"))))
-        assertEquals("수업",p.activity);assertFalse(p.needsEma)
-        val dorm=InferenceEngine.predict(now,listOf(course),null,listOf(fix()),listOf(zone),listOf(place("dorm")))
-        assertEquals("활동 미확인",dorm.activity)
+        assertEquals("수업",p.activity);assertEquals("medium",p.confidence)
+        // The participant's own correction outranks the map's dorm tag, but an overlap is never "high".
+        val dorm=InferenceEngine.predict(now,listOf(course),null,listOf(fix(time=now-180_000),fix()),listOf(zone),listOf(place("dorm")))
+        assertEquals("수업",dorm.activity);assertEquals("medium",dorm.confidence)
     }
 }

@@ -63,8 +63,8 @@ object PaymentInference {
             if(sustained)from else null,if(sustained)until else null,p.name)
     }
     fun prediction(base:Prediction,now:Long,events:List<PaymentEvent>,samples:List<GeoSample>,places:List<MapPlace>):Prediction {
-        // A transaction cannot override class/dorm evidence, or infer eating later at home.
-        if(base.activity!="활동 미확인" || base.mealExcluded || places.any { p->p.kind=="dorm" && samples.maxByOrNull{it.measuredAt}?.let{p.relation(it) in listOf("inside","boundary")}==true })return base
+        // A transaction cannot override class/movement/dorm evidence or a confident estimate, or infer eating later at home.
+        if(base.activity in listOf(InferenceEngine.CLASS,InferenceEngine.MOVE,InferenceEngine.MEAL) || base.confidence=="high" || base.mealExcluded || places.any { p->p.kind=="dorm" && samples.maxByOrNull{it.measuredAt}?.let{p.relation(it) in listOf("inside","boundary")}==true })return base
         val e=events.filter{it.kind=="approval" && it.usable && now-it.observedAt in 0..30*60_000}.maxByOrNull{it.observedAt}?:return base
         val o=observation(e,samples,places)
         val p=places.firstOrNull{it.name==o.place}?:return base
