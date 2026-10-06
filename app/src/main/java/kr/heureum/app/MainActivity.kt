@@ -401,7 +401,7 @@ class MainActivity:Activity(){
     }
     private fun placeConnection(done:()->Unit){
         AlertDialog.Builder(this).setTitle("주변 장소를 자동으로 찾을까요?")
-            .setMessage("학교·기숙사·건물 정보를 지도에서 가져와 이름을 입력하지 않아도 돼요. 약 4km 범위와 IP가 OpenStreetMap의 Overpass 제공자에게 전달돼요. 정확한 GPS 기록, 시간표, 앱 사용, EMA는 보내지 않아요. 지도 데이터가 없는 건물은 미확인으로 남겨요.")
+            .setMessage("학교·기숙사·건물 정보를 지도에서 가져와 이름을 입력하지 않아도 돼요. 약 4km 범위와 IP가 OpenStreetMap의 Overpass 제공자에게 전달돼요. 정확한 GPS 기록, 시간표, 앱 사용, EMA는 보내지 않아요.${if(KakaoLocal.enabled)" 학교를 찾으면 학교 이름과 학교 중심 좌표로 카카오 로컬에서 건물·식당 이름을 추가로 조회해요(내 GPS 좌표는 보내지 않아요)." else ""} 틀린 건물 정보는 지도에서 직접 고칠 수 있어요.")
             .setNegativeButton("지금은 건너뛰기"){_,_->prefs.placeConsentSeen=true;prefs.automaticPlaces=false;done()}
             .setPositiveButton("자동 연결"){_,_->prefs.placeConsentSeen=true;prefs.automaticPlaces=true;done()}.show()
     }
@@ -410,8 +410,9 @@ class MainActivity:Activity(){
         val fix=store.geoSince(System.currentTimeMillis()-600_000).lastOrNull{it.accuracyM<=100}
         val center=fix?.let{MapPoint(it.latitude,it.longitude)}?:items.firstOrNull()?.center?:MapPoint(37.5665,126.978)
         val map=CampusMapView(this,center.latitude,center.longitude).apply{showSelection=false;mapPlaces=items;currentFix=fix}
+        map.onPlaceTapped={place->placeCorrectionDialog(place){map.mapPlaces=AutomaticPlaces.places(this)}}
         val status=text(AutomaticPlaces.status(this),14);f.addView(status)
-        label(f,"주황: 기숙사 · 초록: 건물 · 보라: 학교. 지도상의 이름과 경계예요. GPS 위치는 오차가 반영된 파란 원으로 표시해요.",12)
+        label(f,"주황: 기숙사 · 초록: 건물 · 보라: 학교. GPS 위치는 오차가 반영된 파란 원이에요. 이름이나 용도가 틀린 건물은 눌러서 고칠 수 있어요.",12)
         f.addView(map,LinearLayout.LayoutParams(-1,dp(300)))
         val controls=row();controls.addView(button("−"){map.changeZoom(-1)},LinearLayout.LayoutParams(0,dp(48),1f));controls.addView(button("＋"){map.changeZoom(1)},LinearLayout.LayoutParams(0,dp(48),1f));f.addView(controls)
         f.addView(button("현재 위치에서 자동 찾기",true){currentLocation { location ->
@@ -421,6 +422,29 @@ class MainActivity:Activity(){
         val d=AlertDialog.Builder(this).setTitle("주변 장소 지도").setView(scrolled(f)).setPositiveButton("닫기",null).create()
         val update=object:Runnable{override fun run(){if(!d.isShowing)return;status.text=AutomaticPlaces.status(this@MainActivity);map.mapPlaces=AutomaticPlaces.places(this@MainActivity);handler.postDelayed(this,1500)}}
         d.setOnDismissListener{handler.removeCallbacks(update);map.close()};d.show();handler.post(update)
+    }
+    /** Lets the participant rename a map building or change its kind; stored on this device only. */
+    private fun placeCorrectionDialog(place:MapPlace,done:()->Unit){
+        val original=AutomaticPlaces.original(this,place.id)?:place
+        val current=prefs.placeCorrections()[place.id]
+        val f=dialogContent()
+        val others=(original.aliases-original.name).filter{it.isNotBlank()}
+        label(f,"지도 원래 정보: ${original.name} · ${PlaceCorrections.choices.firstOrNull{it.first==original.kind}?.second?:MapPlaceTags.label(original.kind)}${if(others.isNotEmpty())"\n다른 이름: ${others.joinToString(", ")}" else ""}",13)
+        val name=field(f,"이 건물의 이름",current?.name?:place.name,"예: SW타운")
+        gap(f,12);label(f,"용도",12)
+        val kinds=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,PlaceCorrections.choices.map{it.second})
+            val index=PlaceCorrections.choices.indexOfFirst{it.first==place.kind};setSelection(if(index>=0)index else PlaceCorrections.choices.lastIndex)}
+        f.addView(kinds)
+        label(f,"고친 정보는 이 휴대폰에만 저장되고, 이후 기록부터 활동 추정에 반영돼요. 시간표의 강의실 표기와 맞추려면 이름에 약어(예: NTH)를 넣어도 돼요.",12)
+        val builder=AlertDialog.Builder(this).setTitle("건물 정보 고치기").setView(scrolled(f)).setNegativeButton("취소",null)
+            .setPositiveButton("저장"){_,_->
+                val kind=PlaceCorrections.choices[kinds.selectedItemPosition].first
+                val newName=name.text.toString().trim().takeIf{it.isNotEmpty() && it!=original.name}
+                if(newName==null && kind==original.kind)prefs.deletePlaceCorrection(place.id) else prefs.savePlaceCorrection(PlaceCorrection(place.id,newName,kind.takeIf{it!=original.kind}))
+                toast("건물 정보를 저장했어요.");done()
+            }
+        if(current!=null)builder.setNeutralButton("원래대로"){_,_->prefs.deletePlaceCorrection(place.id);toast("지도 원래 정보로 되돌렸어요.");done()}
+        builder.show()
     }
     private fun manualPlacesDialog(){
         val f=dialogContent();label(f,"자동 장소 인식만으로 사용할 수 있어요. 이 설정은 지도 오류를 직접 보정하고 싶을 때만 사용해요.",13)

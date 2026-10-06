@@ -180,6 +180,15 @@ class Preferences(context: Context, name: String = "settings") {
     var automaticPlaces: Boolean get()=p.getBoolean("automaticPlaces",false);set(v){p.edit().putBoolean("automaticPlaces",v).apply()}
     var placeConsentSeen: Boolean get()=p.getBoolean("placeConsentSeen",false);set(v){p.edit().putBoolean("placeConsentSeen",v).apply()}
     var lastPlaceLookup: Long get()=p.getLong("lastPlaceLookup",0);set(v){p.edit().putLong("lastPlaceLookup",v).apply()}
+    var lastKakaoLookup: Long get()=p.getLong("lastKakaoLookup",0);set(v){p.edit().putLong("lastKakaoLookup",v).apply()}
+    /** Participant's own building fixes, keyed by map place id. Kept on device only. */
+    fun placeCorrections():Map<String,PlaceCorrection> = runCatching {
+        val rows=JSONArray(p.getString("placeCorrections","[]"))
+        (0 until rows.length()).map { i -> val r=rows.getJSONObject(i);PlaceCorrection(r.getString("id"),r.optString("name").takeIf{it.isNotBlank()},r.optString("kind").takeIf{it.isNotBlank()}) }.associateBy { it.placeId }
+    }.getOrDefault(emptyMap())
+    fun savePlaceCorrection(c:PlaceCorrection){writePlaceCorrections(placeCorrections()+(c.placeId to c))}
+    fun deletePlaceCorrection(id:String){writePlaceCorrections(placeCorrections()-id)}
+    private fun writePlaceCorrections(all:Map<String,PlaceCorrection>){p.edit().putString("placeCorrections",JSONArray().apply{all.values.forEach{c->put(JSONObject().put("id",c.placeId).put("name",c.name?:"").put("kind",c.kind?:""))}}.toString()).apply()}
     var placeLookupStatus: String get()=p.getString("placeLookupStatus","위치가 잡히면 주변 장소를 자동으로 찾아요.")!!;set(v){p.edit().putString("placeLookupStatus",v).apply()}
     var semesterFrom: String get()=p.getString("semesterFrom",LocalDate.now(STUDY_ZONE).toString())!!;set(v){p.edit().putString("semesterFrom",v).apply()}
     var semesterUntil: String get()=p.getString("semesterUntil",LocalDate.now(STUDY_ZONE).plusMonths(4).toString())!!;set(v){p.edit().putString("semesterUntil",v).apply()}
@@ -196,7 +205,8 @@ class Preferences(context: Context, name: String = "settings") {
     fun deleteZone(id:String){writeZones(zones().filterNot { it.id==id })}
     private fun writeZones(zones:List<PlaceZone>){p.edit().putString("zones",zoneJson(zones,true).toString()).apply()}
     fun placeSettingsJson(includeCoordinates:Boolean):JSONObject {
-        val root=JSONObject().put("zones",zoneJson(zones(),includeCoordinates)).put("automaticPlacesEnabled",automaticPlaces).put("automaticPlaceSource","OpenStreetMap via Overpass; local cache up to 7 days")
+        val root=JSONObject().put("zones",zoneJson(zones(),includeCoordinates)).put("automaticPlacesEnabled",automaticPlaces).put("automaticPlaceSource","OpenStreetMap via Overpass (+ Kakao Local when configured); local cache up to 7 days")
+            .put("placeCorrections",JSONArray().apply{placeCorrections().values.forEach{c->put(JSONObject().put("id",c.placeId).put("name",c.name?:JSONObject.NULL).put("kind",c.kind?:JSONObject.NULL))}})
         campus()?.let { c ->
             val row=JSONObject().put("name",c.name).put("radiusM",c.radiusM.toDouble())
             if(includeCoordinates)row.put("latitude",c.latitude).put("longitude",c.longitude)

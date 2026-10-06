@@ -30,6 +30,8 @@ class CampusMapView(context:Context, initialLatitude:Double, initialLongitude:Do
     var mapPlaces:List<MapPlace> = emptyList();set(v){field=v;invalidate()}
     var currentFix:GeoSample?=null;set(v){field=v;invalidate()}
     var onCenterChanged:((Double,Double)->Unit)?=null
+    /** Called with the building (or nearby labelled place) under a tap. */
+    var onPlaceTapped:((MapPlace)->Unit)?=null
     private val density=resources.displayMetrics.density
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
     private val handler=Handler(Looper.getMainLooper())
@@ -167,12 +169,23 @@ class CampusMapView(context:Context, initialLatitude:Double, initialLongitude:Do
             };lastX=event.x;lastY=event.y}
             MotionEvent.ACTION_UP->{parent?.requestDisallowInterceptTouchEvent(false)
                 if(abs(event.x-downX)+abs(event.y-downY)<10*density){performClick()
-                    if(event.y>height-26*density)context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://www.openstreetmap.org/copyright")))}
+                    if(event.y>height-26*density)context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://www.openstreetmap.org/copyright")))
+                    else placeAt(event.x,event.y)?.let{onPlaceTapped?.invoke(it)}}
             }
             MotionEvent.ACTION_CANCEL->parent?.requestDisallowInterceptTouchEvent(false)
         };return true
     }
     override fun performClick():Boolean {super.performClick();return true}
+    /** Innermost footprint under the point, else the closest labelled place within 24 dp. */
+    fun placeAt(x:Float,y:Float):MapPlace? {
+        val center=MapProjection.point(latitude,longitude,zoom)
+        val (lat,lon)=MapProjection.coordinates(center.first+(x-width/2)/density,center.second+(y-height/2)/density,zoom)
+        val tap=GeoSample(lat,lon,0f,0)
+        val candidates=mapPlaces.filter{it.kind!="campus"}
+        candidates.filter{it.containsPoint(tap)}.minByOrNull{it.areaM2}?.let{return it}
+        val reachM=24*MapProjection.metersPerPixel(lat,zoom)
+        return candidates.map{it to it.wallDistanceM(tap)}.filter{it.second<=reachM}.minByOrNull{it.second}?.first
+    }
     fun close(){closed=true;visibleKeys=emptySet();executor.shutdownNow();handler.removeCallbacksAndMessages(null);bitmaps.evictAll()}
     override fun onDetachedFromWindow(){close();super.onDetachedFromWindow()}
 }

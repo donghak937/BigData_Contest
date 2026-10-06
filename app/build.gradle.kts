@@ -1,5 +1,10 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 
+// Optional Kakao Local REST key, read from the git-ignored local.properties (KAKAO_REST_KEY=...).
+val kakaoRestKey: String = rootProject.file("local.properties").takeIf { it.isFile }
+    ?.readLines()?.firstOrNull { it.trim().startsWith("KAKAO_REST_KEY=") }
+    ?.substringAfter("=")?.trim().orEmpty()
+
 android {
     namespace = "kr.heureum.app"
     compileSdk = 35
@@ -8,10 +13,12 @@ android {
         applicationId = "kr.heureum.app"
         minSdk = 28
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 6
+        versionName = "0.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "KAKAO_REST_KEY", "\"$kakaoRestKey\"")
     }
+    buildFeatures { buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
