@@ -69,10 +69,15 @@ class ActivityInferenceTest {
         val now = at(15, 30)
         assertNotEquals("식사", predict(now, listOf(fix(hall, now)), emptyList()).activity)
     }
-    @Test fun dormAtNightWithScreenOffIsConfidentRest() {
+    @Test fun dormAtNightWithScreenOffIsConfidentSleep() {
         val now = at(1, 30)
         val p = predict(now, listOf(fix(dorm, now)), emptyList(), DeviceContext(0, 300_000, null, true))
-        assertEquals("휴식", p.activity); assertEquals("high", p.confidence); assertTrue(p.mealExcluded)
+        assertEquals("수면", p.activity); assertEquals("high", p.confidence); assertTrue(p.mealExcluded)
+    }
+    @Test fun usingThePhoneAtNightIsRestNotSleep() {
+        val now = at(1, 30)
+        assertEquals("휴식", predict(now, listOf(fix(dorm, now)), emptyList(), DeviceContext(250_000, 300_000, AppCategory.LEISURE, true)).activity)
+        assertEquals("수면", predict(now, emptyList(), emptyList(), DeviceContext(0, 300_000, null, true)).activity)
     }
     @Test fun dormDaytimeUsesForegroundApp() {
         val now = at(16, 0)

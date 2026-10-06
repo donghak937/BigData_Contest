@@ -76,7 +76,7 @@ object AutomaticPlaces {
                 val conn=URL("https://overpass-api.de/api/interpreter").openConnection() as HttpURLConnection
                 try {
                     conn.connectTimeout=10_000;conn.readTimeout=40_000;conn.requestMethod="POST";conn.doOutput=true;conn.instanceFollowRedirects=false
-                    conn.setRequestProperty("User-Agent","Heureum/0.6 (Android; kr.heureum.app; campus pilot)")
+                    conn.setRequestProperty("User-Agent","Heureum/0.7 (Android; kr.heureum.app; campus pilot)")
                     conn.setRequestProperty("Content-Type","application/x-www-form-urlencoded; charset=UTF-8")
                     conn.outputStream.use { it.write(("data="+URLEncoder.encode(query,"UTF-8")).toByteArray()) }
                     check(conn.responseCode==200)

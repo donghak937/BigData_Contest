@@ -39,7 +39,7 @@ data class Movement(val distanceM: Double, val speedMps: Double, val spanMs: Lon
  * Grades are rule levels, not calibrated probabilities.
  */
 object InferenceEngine {
-    const val CLASS = "수업"; const val STUDY = "공부"; const val MEAL = "식사"; const val MOVE = "이동"; const val REST = "휴식"; const val UNKNOWN = "활동 미확인"
+    const val CLASS = "수업"; const val STUDY = "공부"; const val MEAL = "식사"; const val MOVE = "이동"; const val REST = "휴식"; const val SLEEP = "수면"; const val UNKNOWN = "활동 미확인"
 
     fun distanceM(aLat: Double, aLon: Double, bLat: Double, bLon: Double): Double {
         val lat = Math.toRadians(bLat - aLat); val lon = Math.toRadians(bLon - aLon)
@@ -198,7 +198,8 @@ object InferenceEngine {
         }
         if (inDorm || place?.kind == "home") {
             val where = if (inDorm) "기숙사" else "주거 건물"
-            if (night) return free(REST, if (device.screenOff) "high" else "medium", "밤 시간에 ${where}에 있어요. 수면·휴식으로 추정해요.")
+            if (night) return if (device.screenBusy) free(REST, "medium", "밤 시간에 ${where}에서 휴대폰을 쓰고 있어요.")
+                else free(SLEEP, if (device.screenOff) "high" else "medium", "밤 시간에 ${where}에 있고 휴대폰을 거의 쓰지 않아요. 수면으로 추정해요.")
             return when (app) {
                 AppCategory.STUDY -> free(STUDY, "medium", "${where}에서 학습·문서 앱을 쓰고 있어요.")
                 AppCategory.LEISURE -> free(REST, if (device.screenBusy) "high" else "medium", "${where}에서 여가 앱을 쓰고 있어요.")
@@ -210,12 +211,14 @@ object InferenceEngine {
                 AppCategory.STUDY -> return free(STUDY, "medium", "학습·문서 앱을 쓰고 있어요.")
                 AppCategory.LEISURE -> return free(REST, "medium", "여가 앱을 쓰고 있어요.")
             }
-            if (night) return free(REST, "medium", "밤 시간에 한곳에 머물러 있어요. 수면·휴식으로 추정해요.")
+            if (night) return if (device.screenBusy) free(REST, "medium", "밤 시간에 한곳에서 휴대폰을 쓰고 있어요.")
+                else free(SLEEP, if (device.screenOff) "medium" else "low", "밤 시간에 한곳에 머물러 있어요. 수면으로 추정해요.")
             if (onCampus) return free(STUDY, "low", "수업이 없는 시간에 학교 안($placeLabel)에 있어요.")
             return free(REST, "low", "지도에서 활동을 특정할 수 없는 장소에 머물러 있어요.")
         }
         // No usable location.
-        if (night) return free(REST, if (device.screenOff) "medium" else "low", "밤 시간이고 최근 위치가 없어요.")
+        if (night) return if (device.screenBusy) free(REST, "low", "밤 시간이고 최근 위치는 없지만 휴대폰을 쓰고 있어요.")
+            else free(SLEEP, if (device.screenOff) "medium" else "low", "밤 시간이고 최근 위치가 없어요. 수면으로 추정해요.")
         return when (app) {
             AppCategory.STUDY -> free(STUDY, "low", "최근 위치는 없지만 학습·문서 앱을 쓰고 있어요.")
             AppCategory.LEISURE -> free(REST, "low", "최근 위치는 없지만 여가 앱을 쓰고 있어요.")

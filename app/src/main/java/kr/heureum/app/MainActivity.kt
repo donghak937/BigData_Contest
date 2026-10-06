@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import kr.heureum.app.core.*
 import kr.heureum.app.data.*
 import kr.heureum.app.ui.CampusMapView
+import kr.heureum.app.ui.DayWheelView
 import android.text.Editable
 import android.text.TextWatcher
 import org.json.JSONObject
@@ -148,6 +149,7 @@ class MainActivity:Activity(){
         stat("${segments.count{it.verification!="estimated"}}","확인한 구간")
         stat("${segments.sumOf{it.screenMs}/60_000}분","수집 중 화면 사용")
         body.addView(stats);gap(body,24)
+        dayWheel(segments)
         paymentTimeline(range.first,range.second)
         label(body,"활동 타임라인",18,ink,true);gap(body,12)
         if(segments.isEmpty()){
@@ -166,6 +168,29 @@ class MainActivity:Activity(){
         if(segments.size>80)label(body,"최신 80개 구간을 표시해요. 전체 기록은 설정에서 내보낼 수 있어요.",12)
     }
 
+    /** 24-hour wheel of the day's estimated/confirmed activities with a duration legend. */
+    private fun dayWheel(segments:List<Segment>){
+        label(body,"하루 활동 원",18,ink,true);gap(body,4)
+        label(body,"0시가 맨 위, 시계 방향이에요. 회색 바탕은 기록하지 않은 시간이에요.",12);gap(body,10)
+        val c=card();val arcs=DayWheel.arcs(displayDate,segments)
+        val today=displayDate==LocalDate.now(STUDY_ZONE)
+        val wheel=DayWheelView(this).apply{this.arcs=arcs
+            nowMinute=if(today)java.time.ZonedDateTime.now(STUDY_ZONE).let{it.hour*60+it.minute+it.second/60.0} else null}
+        c.addView(wheel,LinearLayout.LayoutParams(-1,-2));gap(c,12)
+        val elapsed=if(today)java.time.ZonedDateTime.now(STUDY_ZONE).let{it.hour*60+it.minute} else 1440
+        val totals=DayWheel.totals(arcs)
+        val recorded=totals.sumOf{it.second}
+        (totals+listOf("기록 없음" to (elapsed-recorded).coerceAtLeast(0))).filter{it.second>0}.forEach{(activity,minutes)->
+            val r=row()
+            val swatch=View(this).apply{background=bg(if(activity=="기록 없음")Color.rgb(236,235,231) else DayWheelView.color(activity),4)}
+            r.addView(swatch,LinearLayout.LayoutParams(dp(14),dp(14)).apply{rightMargin=dp(10)})
+            r.addView(text(activity,14,ink,true),LinearLayout.LayoutParams(0,-2,1f))
+            r.addView(text("${DayWheel.duration(minutes)} · ${(minutes*100.0/elapsed.coerceAtLeast(1)).toInt()}%",13,muted))
+            c.addView(r,LinearLayout.LayoutParams(-1,dp(30)))
+        }
+        if(arcs.any{!it.confirmed})label(c,"자동 추정이 섞여 있어요. 틀린 구간은 아래 타임라인에서 고치면 원에도 반영돼요.",12)
+        gap(body,24)
+    }
     private fun paymentTimeline(from:Long,until:Long) {
         val events=store.payments(from,until)
         if(events.isEmpty())return
@@ -327,7 +352,7 @@ class MainActivity:Activity(){
     }
     private fun answerDialog(p:Prompt){activityPicker("${time(p.segmentStart)}의 실제 활동",p.suggested){respond(p,it)}}
     private fun activityPicker(title:String,suggested:String,done:(String)->Unit){
-        val options=listOf("수업","공부","업무","식사","이동","휴식","기타")
+        val options=listOf("수업","공부","업무","식사","이동","휴식","수면","기타")
         AlertDialog.Builder(this).setTitle(title).setItems(options.toTypedArray()){_,i->
             if(options[i]=="기타"){
                 val f=dialogContent();val value=field(f,"실제 활동","","짧게 입력해 주세요")
